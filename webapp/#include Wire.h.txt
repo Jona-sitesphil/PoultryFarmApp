@@ -1,0 +1,1359 @@
+#include <Wire.h>
+#include <LiquidCrystal_PCF8574.h>
+#include <DHT.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <time.h>
+
+// ======================================================
+// 1. WIFI SETTINGS
+// ======================================================
+
+const char* ssid = "PLDTHOMEFIBR6MyhS";
+const char* password = "PLDTWIFI76XDu";
+
+// The Flutter app reads and writes this Firebase Realtime Database project.
+// The current database rules allow unauthenticated demo access.
+const char* firebaseDatabaseUrl =
+  "https://thesispoultry-ccb04-default-rtdb.firebaseio.com";
+
+WiFiClientSecure firebaseClient;
+
+
+// ======================================================
+// 2. HARDWARE PINS
+// ======================================================
+
+#define RELAY_FAN_PIN 13
+#define RELAY_BULB_PIN 27
+
+#define DHTPIN 4
+#define DHTTYPE DHT22
+
+#define SDA_PIN 21
+#define SCL_PIN 22
+
+// ======================================================
+// 3. HARDWARE OBJECTS
+// ======================================================
+
+DHT dht(DHTPIN, DHTTYPE);
+
+LiquidCrystal_PCF8574 lcd(0x27);
+
+// ======================================================
+// 4. TEMPERATURE CONTROL SETTINGS
+// ======================================================
+//
+// 27.5°C OR BELOW
+// BULB = ON
+// FAN = OFF
+//
+// 27.6°C - 28.9°C
+// KEEP PREVIOUS STATE
+//
+// 29.0°C OR ABOVE
+// BULB = OFF
+// FAN = ON
+//
+// ======================================================
+
+const float BULB_ON_TEMP = 27.5;
+const float FAN_ON_TEMP = 29.0;
+
+// ======================================================
+// 5. DHT22 ERROR SETTINGS
+// ======================================================
+
+int dhtFailCount = 0;
+
+const int DHT_FAIL_LIMIT = 3;
+
+// ======================================================
+// 6. SENSOR TIMING
+// ======================================================
+
+unsigned long lastDHTRead = 0;
+
+// DHT22 reading every 2 seconds
+const unsigned long DHT_INTERVAL = 2000;
+
+unsigned long lastFirebaseControlRead = 0;
+const unsigned long FIREBASE_CONTROL_INTERVAL = 3000;
+
+bool firebaseAutomaticMode = true;
+// The Firebase master switch is fail-safe: the hardware stays off until
+// Firebase explicitly reports system_enabled=true.
+bool firebaseSystemEnabled = false;
+bool firebaseRemoteFan = false;
+bool firebaseRemoteHeater = false;
+float firebaseBulbOnTemp = BULB_ON_TEMP;
+float firebaseFanOnTemp = FAN_ON_TEMP;
+
+// ======================================================
+// 7. LAST SENSOR VALUES
+// ======================================================
+
+float lastTemperature = 0.0;
+float lastHumidity = 0.0;
+bool hasValidTemperatureReading = false;
+
+// ======================================================
+// 8. RELAY STATES
+// ======================================================
+//
+// true = ON
+// false = OFF
+//
+// These variables remember the previous state.
+// This creates hysteresis between 27.5°C and 29.0°C.
+//
+// ======================================================
+
+bool fanIsOn = false;
+bool bulbIsOn = false;
+
+// ======================================================
+// 9. APPLY RELAY STATES
+// ======================================================
+//
+// ACTIVE LOW RELAY:
+//
+// LOW = ON
+// HIGH = OFF
+//
+// ======================================================
+
+void applyRelayStates()
+{
+// FAN
+if (fanIsOn)
+{
+digitalWrite(RELAY_FAN_PIN, LOW);
+}
+else
+{
+digitalWrite(RELAY_FAN_PIN, HIGH);
+}
+
+// BULB
+if (bulbIsOn)
+{
+digitalWrite(RELAY_BULB_PIN, LOW);
+}
+else
+{
+  digitalWrite(RELAY_BULB_PIN, HIGH);
+  }
+}
+
+// Apply the automatic temperature rule using hysteresis. The middle range
+// intentionally keeps the previous state so the relays do not rapidly switch
+// around either threshold.
+void applyAutomaticTemperatureControl(float temperature)
+{
+  if (temperature >= firebaseFanOnTemp)
+  {
+    fanIsOn = true;
+    bulbIsOn = false;
+  }
+  else if (temperature <= firebaseBulbOnTemp)
+  {
+    fanIsOn = false;
+    bulbIsOn = true;
+  }
+}
+
+// ======================================================
+// 10. LCD DISPLAY
+// ======================================================
+//
+// LINE 1:
+// T:27.5C H:70%
+//
+// LINE 2:
+// F:OFF B:ON
+//
+// ======================================================
+
+void displayStatus(float temperature, float humidity)
+{
+lcd.clear();
+
+// ====================================================
+// LINE 1
+// ====================================================
+
+lcd.setCursor(0, 0);
+
+lcd.print("T:");
+lcd.print(temperature, 1);
+
+lcd.write((uint8_t)223);
+
+lcd.print("C");
+
+lcd.setCursor(9, 0);
+
+lcd.print("H:");
+lcd.print(humidity, 0);
+lcd.print("%");
+
+// ====================================================
+// LINE 2
+// ====================================================
+
+lcd.setCursor(0, 1);
+
+lcd.print("F:");
+
+if (fanIsOn)
+{
+lcd.print("ON ");
+}
+else
+{
+lcd.print("OFF");
+}
+
+lcd.setCursor(8, 1);
+
+lcd.print("B:");
+
+if (bulbIsOn)
+{
+lcd.print("ON ");
+}
+else
+{
+lcd.print("OFF");
+}
+}
+
+// ======================================================
+// 11. LCD ERROR / MESSAGE
+// ======================================================
+
+void showLCD(String line1, String line2)
+{
+lcd.clear();
+
+lcd.setCursor(0, 0);
+lcd.print(line1.substring(0, 16));
+
+lcd.setCursor(0, 1);
+lcd.print(line2.substring(0, 16));
+}
+
+// ======================================================
+// 12. WIFI CONNECTION
+// ======================================================
+
+void connectWiFi()
+{
+Serial.println();
+Serial.println("Connecting to WiFi...");
+
+showLCD(
+"P.O.U.L.T.R.Y",
+"Connecting WiFi"
+);
+
+WiFi.mode(WIFI_STA);
+
+WiFi.begin(
+ssid,
+password
+);
+
+int wifiAttempts = 0;
+
+while (
+WiFi.status() != WL_CONNECTED &&
+wifiAttempts < 40
+)
+{
+delay(500);
+
+Serial.print(".");
+
+wifiAttempts++;
+}
+
+Serial.println();
+
+if (WiFi.status() == WL_CONNECTED)
+{
+Serial.println("WiFi Connected!");
+
+Serial.print("ESP32 IP: ");
+Serial.println(WiFi.localIP());
+
+showLCD(
+"WiFi Connected!",
+WiFi.localIP().toString()
+);
+
+delay(1500);
+}
+else
+{
+Serial.println("WiFi FAILED!");
+
+Serial.println("Offline safe mode: relays OFF.");
+
+showLCD(
+"WiFi FAILED",
+"Offline Mode"
+);
+
+delay(1500);
+}
+}
+
+// ======================================================
+// 13. FIREBASE REALTIME DATABASE REST HELPERS
+// ======================================================
+
+String firebaseEndpoint(const String &path)
+{
+  return String(firebaseDatabaseUrl) + path + ".json";
+}
+
+int firebaseGet(const String &path, String &response)
+{
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    return -1;
+  }
+
+  HTTPClient http;
+
+  if (!http.begin(firebaseClient, firebaseEndpoint(path)))
+  {
+    return -2;
+  }
+
+  http.setTimeout(2500);
+  int responseCode = http.GET();
+  response = http.getString();
+  http.end();
+
+  return responseCode;
+}
+
+int firebaseWrite(const char* method, const String &path, const String &payload)
+{
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    return -1;
+  }
+
+  HTTPClient http;
+
+  if (!http.begin(firebaseClient, firebaseEndpoint(path)))
+  {
+    return -2;
+  }
+
+  http.setTimeout(2500);
+  http.addHeader("Content-Type", "application/json");
+
+  int responseCode = http.sendRequest(
+    method,
+    (uint8_t*)payload.c_str(),
+    payload.length()
+  );
+
+  http.end();
+
+  return responseCode;
+}
+
+bool readJsonBoolean(
+  const String &json,
+  const char* key,
+  bool fallback
+)
+{
+  String keyToken = String("\"") + key + "\"";
+  int keyPosition = json.indexOf(keyToken);
+
+  if (keyPosition < 0)
+  {
+    return fallback;
+  }
+
+  int colonPosition = json.indexOf(':', keyPosition);
+
+  if (colonPosition < 0)
+  {
+    return fallback;
+  }
+
+  String value = json.substring(colonPosition + 1);
+  value.trim();
+
+  if (value.startsWith("true"))
+  {
+    return true;
+  }
+
+  if (value.startsWith("false"))
+  {
+    return false;
+  }
+
+  return fallback;
+}
+
+float readJsonNumber(
+  const String &json,
+  const char* key,
+  float fallback
+)
+{
+  String keyToken = String("\"") + key + "\"";
+  int keyPosition = json.indexOf(keyToken);
+
+  if (keyPosition < 0)
+  {
+    return fallback;
+  }
+
+  int colonPosition = json.indexOf(':', keyPosition);
+
+  if (colonPosition < 0)
+  {
+    return fallback;
+  }
+
+  int valueEnd = json.indexOf(',', colonPosition + 1);
+  if (valueEnd < 0)
+  {
+    valueEnd = json.indexOf('}', colonPosition + 1);
+  }
+
+  if (valueEnd < 0)
+  {
+    return fallback;
+  }
+
+  String value = json.substring(colonPosition + 1, valueEnd);
+  value.trim();
+  if (value.length() == 0)
+  {
+    return fallback;
+  }
+
+  return value.toFloat();
+}
+
+String readJsonString(const String &json, const char* key, const String &fallback)
+{
+  String keyToken = String("\"") + key + "\"";
+  int keyPosition = json.indexOf(keyToken);
+
+  if (keyPosition < 0)
+  {
+    return fallback;
+  }
+
+  int colonPosition = json.indexOf(':', keyPosition);
+
+  if (colonPosition < 0)
+  {
+    return fallback;
+  }
+
+  int openingQuote = json.indexOf('"', colonPosition + 1);
+
+  if (openingQuote < 0)
+  {
+    return fallback;
+  }
+
+  int closingQuote = json.indexOf('"', openingQuote + 1);
+
+  if (closingQuote < 0)
+  {
+    return fallback;
+  }
+
+  return json.substring(openingQuote + 1, closingQuote);
+}
+
+void syncFirebaseControl()
+{
+  String response;
+  int responseCode = firebaseGet(
+    "/system_settings/control",
+    response
+  );
+
+  if (responseCode < 200 || responseCode >= 300)
+  {
+    Serial.print("Firebase control read failed: ");
+    Serial.println(responseCode);
+    return;
+  }
+
+  String systemMode = readJsonString(
+    response,
+    "system_mode",
+    "automatic"
+  );
+
+  firebaseAutomaticMode = !systemMode.equalsIgnoreCase("manual");
+  firebaseSystemEnabled = readJsonBoolean(
+    response,
+    "system_enabled",
+    firebaseSystemEnabled
+  );
+  firebaseRemoteFan = readJsonBoolean(
+    response,
+    "exhaust_fan",
+    firebaseRemoteFan
+  );
+  firebaseRemoteHeater = readJsonBoolean(
+    response,
+    "heater",
+    firebaseRemoteHeater
+  );
+
+  float configuredBulbOnTemp = readJsonNumber(
+    response,
+    "min_temp",
+    BULB_ON_TEMP
+  );
+  float configuredFanOnTemp = readJsonNumber(
+    response,
+    "max_temp",
+    FAN_ON_TEMP
+  );
+
+  if (configuredBulbOnTemp < configuredFanOnTemp)
+  {
+    firebaseBulbOnTemp = configuredBulbOnTemp;
+    firebaseFanOnTemp = configuredFanOnTemp;
+  }
+  else
+  {
+    // Keep safe firmware defaults if Firebase contains invalid thresholds.
+    firebaseBulbOnTemp = BULB_ON_TEMP;
+    firebaseFanOnTemp = FAN_ON_TEMP;
+  }
+
+  Serial.print("Firebase mode: ");
+  Serial.println(firebaseAutomaticMode ? "automatic" : "manual");
+
+  Serial.print("Bulb ON temperature: ");
+  Serial.println(firebaseBulbOnTemp, 1);
+
+  Serial.print("Fan ON temperature: ");
+  Serial.println(firebaseFanOnTemp, 1);
+
+  Serial.print("Firebase system: ");
+  Serial.println(firebaseSystemEnabled ? "ON" : "OFF");
+
+  if (!firebaseSystemEnabled)
+  {
+    fanIsOn = false;
+    bulbIsOn = false;
+    applyRelayStates();
+  }
+  else if (hasValidTemperatureReading)
+  {
+    if (firebaseAutomaticMode)
+    {
+      // Re-apply automatic control immediately after a mode or power change,
+      // instead of waiting for the next DHT22 reading.
+      applyAutomaticTemperatureControl(lastTemperature);
+    }
+    else
+    {
+      fanIsOn = firebaseRemoteFan;
+      bulbIsOn = firebaseRemoteHeater;
+    }
+
+    applyRelayStates();
+    displayStatus(lastTemperature, lastHumidity);
+  }
+}
+
+String firebaseReadingTimeJson()
+{
+  time_t now = time(nullptr);
+
+  if (now < 1700000000)
+  {
+    // A numeric fallback still sorts correctly in Realtime Database.
+    return String((unsigned long)millis());
+  }
+
+  struct tm timeInfo;
+  gmtime_r(&now, &timeInfo);
+
+  char isoTime[25];
+  strftime(isoTime, sizeof(isoTime), "%Y-%m-%dT%H:%M:%SZ", &timeInfo);
+
+  return String("\"") + isoTime + "\"";
+}
+
+void writeFirebaseControlState()
+{
+  String payload =
+    String("{\"exhaust_fan\":") +
+    (fanIsOn ? "true" : "false") +
+    ",\"heater\":" +
+    (bulbIsOn ? "true" : "false") +
+    "}";
+
+  int responseCode = firebaseWrite(
+    "PATCH",
+    "/system_settings/control",
+    payload
+  );
+
+  if (responseCode < 200 || responseCode >= 300)
+  {
+    Serial.print("Firebase control write failed: ");
+    Serial.println(responseCode);
+  }
+}
+
+void writeFirebaseSensorReading(
+  float temperature,
+  float humidity,
+  float heatIndex,
+  const String &statusStr
+)
+{
+  String readingId = String("esp32-") + String(millis());
+  String payload =
+    String("{\"temperature\":") + String(temperature, 1) +
+    ",\"humidity\":" + String(humidity, 1) +
+    ",\"heat_index\":" + String(heatIndex, 1) +
+    ",\"status\":\"" + statusStr +
+    "\",\"fan_status\":\"" + (fanIsOn ? "ON" : "OFF") +
+    "\",\"bulb_status\":\"" + (bulbIsOn ? "ON" : "OFF") +
+    "\",\"reading_time\":" + firebaseReadingTimeJson() +
+    "}";
+
+  int responseCode = firebaseWrite(
+    "PUT",
+    String("/sensor_readings/") + readingId,
+    payload
+  );
+
+  if (responseCode < 200 || responseCode >= 300)
+  {
+    Serial.print("Firebase sensor write failed: ");
+    Serial.println(responseCode);
+  }
+}
+
+void initializeFirebaseTime()
+{
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+
+  struct tm timeInfo;
+  if (getLocalTime(&timeInfo, 3000))
+  {
+    Serial.println("Firebase timestamp clock synchronized.");
+  }
+  else
+  {
+    Serial.println("Clock sync failed; using millisecond timestamps.");
+  }
+}
+
+// ======================================================
+// 14. READ DHT22
+// ======================================================
+
+bool readDHT22(float &temperature, float &humidity)
+{
+Serial.println();
+Serial.println("Reading DHT22...");
+
+humidity = dht.readHumidity();
+
+temperature = dht.readTemperature();
+
+// ====================================================
+// CHECK INVALID READING
+// ====================================================
+
+if (
+isnan(temperature) ||
+isnan(humidity)
+)
+{
+Serial.println(
+"ERROR: INVALID DHT22 READING!"
+);
+
+Serial.println(
+"Temperature = NaN"
+);
+
+Serial.println(
+"Humidity = NaN"
+);
+
+return false;
+}
+
+// ====================================================
+// SUCCESS
+// ====================================================
+
+Serial.println(
+"DHT22 READ SUCCESS!"
+);
+
+Serial.print(
+"Temperature : "
+);
+
+Serial.print(
+temperature,
+1
+);
+
+Serial.println(
+" C"
+);
+
+Serial.print(
+"Humidity : "
+);
+
+Serial.print(
+humidity,
+1
+);
+
+Serial.println(
+" %"
+);
+
+return true;
+}
+
+// ======================================================
+// 14. SETUP
+// ======================================================
+
+void setup()
+{
+Serial.begin(115200);
+
+delay(2000);
+
+Serial.println();
+Serial.println("=================================");
+Serial.println(" POULTRY SYSTEM STARTING");
+Serial.println("=================================");
+
+// ====================================================
+// RELAY PINS
+// ====================================================
+
+pinMode(
+RELAY_FAN_PIN,
+OUTPUT
+);
+
+pinMode(
+RELAY_BULB_PIN,
+OUTPUT
+);
+
+// ====================================================
+// INITIAL RELAY STATE
+// BOTH OFF
+// ====================================================
+
+fanIsOn = false;
+bulbIsOn = false;
+
+applyRelayStates();
+
+// ====================================================
+// I2C
+// ====================================================
+
+Serial.println(
+"Initializing I2C..."
+);
+
+Wire.begin(
+SDA_PIN,
+SCL_PIN
+);
+
+delay(200);
+
+// ====================================================
+// LCD
+// ====================================================
+
+Serial.println(
+"Initializing LCD..."
+);
+
+lcd.begin(
+16,
+2
+);
+
+lcd.setBacklight(255);
+
+delay(300);
+
+// ====================================================
+// LCD STARTUP
+// ====================================================
+
+lcd.clear();
+
+lcd.setCursor(0, 0);
+
+lcd.print(
+"P.O.U.L.T.R.Y"
+);
+
+lcd.setCursor(0, 1);
+
+lcd.print(
+"Starting..."
+);
+
+Serial.println(
+"LCD initialized."
+);
+
+delay(1500);
+
+// ====================================================
+// DHT22 INITIALIZATION
+// ====================================================
+
+Serial.println(
+"Initializing DHT22..."
+);
+
+dht.begin();
+
+// Give DHT22 time to stabilize
+delay(3000);
+
+// ====================================================
+// FIRST DHT22 READING
+// ====================================================
+
+float humidity;
+float temperature;
+
+bool sensorOK =
+readDHT22(
+temperature,
+humidity
+);
+
+if (!sensorOK)
+{
+dhtFailCount++;
+
+showLCD(
+"DHT22 STARTING",
+"Please wait..."
+);
+
+delay(2500);
+}
+else
+{
+dhtFailCount = 0;
+
+lastTemperature =
+temperature;
+hasValidTemperatureReading = true;
+
+lastHumidity =
+humidity;
+
+// Keep the hardware off during startup. The Firebase master switch must
+// explicitly enable the system before temperature logic can run.
+fanIsOn = false;
+bulbIsOn = false;
+applyRelayStates();
+
+// ==================================================
+// DISPLAY LCD
+// ==================================================
+
+displayStatus(
+temperature,
+humidity
+);
+
+delay(2000);
+}
+
+// ====================================================
+// WIFI
+// ====================================================
+
+connectWiFi();
+
+if (WiFi.status() == WL_CONNECTED)
+{
+firebaseClient.setInsecure();
+initializeFirebaseTime();
+syncFirebaseControl();
+
+if (firebaseSystemEnabled && !firebaseAutomaticMode)
+{
+fanIsOn = firebaseRemoteFan;
+bulbIsOn = firebaseRemoteHeater;
+applyRelayStates();
+}
+}
+else
+{
+// No Firebase connection means the relays remain safely OFF.
+firebaseSystemEnabled = false;
+fanIsOn = false;
+bulbIsOn = false;
+applyRelayStates();
+}
+
+// ====================================================
+// FINAL STARTUP DISPLAY
+// ====================================================
+
+lcd.clear();
+
+lcd.setCursor(
+0,
+0
+);
+
+lcd.print(
+"P.O.U.L.T.R.Y"
+);
+
+lcd.setCursor(
+0,
+1
+);
+
+lcd.print(
+"System Ready"
+);
+
+delay(1500);
+
+// ====================================================
+// PREVENT IMMEDIATE DHT22 READING
+// ====================================================
+
+lastDHTRead =
+millis();
+}
+
+// ======================================================
+// 15. MAIN LOOP
+// ======================================================
+
+void loop()
+{
+// If the Firebase connection is lost, fail safe and turn both relays off.
+if (WiFi.status() != WL_CONNECTED)
+{
+firebaseSystemEnabled = false;
+fanIsOn = false;
+bulbIsOn = false;
+applyRelayStates();
+}
+
+// ====================================================
+// A. READ FIREBASE CONTROL COMMANDS
+// ====================================================
+
+if (
+WiFi.status() == WL_CONNECTED &&
+millis() - lastFirebaseControlRead >= FIREBASE_CONTROL_INTERVAL
+)
+{
+lastFirebaseControlRead = millis();
+syncFirebaseControl();
+}
+
+// ====================================================
+// B. DHT22 INTERVAL
+// ====================================================
+
+if (
+millis() - lastDHTRead <
+DHT_INTERVAL
+)
+{
+return;
+}
+
+lastDHTRead =
+millis();
+
+// ====================================================
+// C. READ DHT22
+// ====================================================
+
+float humidity;
+float temperature;
+
+bool sensorOK =
+readDHT22(
+temperature,
+humidity
+);
+
+// ====================================================
+// D. DHT22 ERROR
+// ====================================================
+
+if (!sensorOK)
+{
+dhtFailCount++;
+
+Serial.print(
+"DHT22 READ ERROR - Fail Count: "
+);
+
+Serial.println(
+dhtFailCount
+);
+
+// ==================================================
+// RETRY
+// ==================================================
+
+if (
+dhtFailCount <
+DHT_FAIL_LIMIT
+)
+{
+Serial.println(
+"Retrying DHT22..."
+);
+
+lcd.setCursor(
+0,
+1
+);
+
+lcd.print(
+"DHT Retry "
+);
+
+lcd.print(
+dhtFailCount
+);
+
+lcd.print(
+"/3 "
+);
+
+return;
+}
+
+// ==================================================
+// DHT FAILED 3 TIMES
+// ==================================================
+
+Serial.println(
+"DHT22 FAILED 3 TIMES!"
+);
+
+Serial.println(
+"Check DHT22 wiring."
+);
+
+// SAFETY
+fanIsOn = false;
+bulbIsOn = false;
+
+applyRelayStates();
+
+lcd.clear();
+
+lcd.setCursor(
+0,
+0
+);
+
+lcd.print(
+"DHT22 ERROR!"
+);
+
+lcd.setCursor(
+0,
+1
+);
+
+lcd.print(
+"Check Wiring"
+);
+
+return;
+}
+
+// ====================================================
+// E. SENSOR SUCCESS
+// ====================================================
+
+dhtFailCount = 0;
+
+lastTemperature =
+temperature;
+hasValidTemperatureReading = true;
+
+lastHumidity =
+humidity;
+
+// ====================================================
+// F. HEAT INDEX
+// ====================================================
+
+float heatIndex =
+dht.computeHeatIndex(
+temperature,
+humidity,
+false
+);
+
+// ====================================================
+// G. TEMPERATURE CONTROL
+// ====================================================
+//
+// 29.0°C OR ABOVE
+// FAN ON
+// BULB OFF
+//
+// 27.6°C - 28.9°C
+// KEEP PREVIOUS STATE
+//
+// 27.5°C OR BELOW
+// FAN OFF
+// BULB ON
+//
+// ====================================================
+
+String statusStr = "NORMAL";
+
+// ====================================================
+// 29.0°C OR ABOVE
+//
+// FAN ON
+// BULB OFF
+// ====================================================
+
+if (!firebaseSystemEnabled)
+{
+fanIsOn = false;
+bulbIsOn = false;
+statusStr = "SYSTEM_OFF";
+}
+
+else if (!firebaseAutomaticMode)
+{
+fanIsOn = firebaseRemoteFan;
+bulbIsOn = firebaseRemoteHeater;
+statusStr = "MANUAL";
+}
+
+else
+{
+  applyAutomaticTemperatureControl(temperature);
+  statusStr = temperature >= firebaseFanOnTemp ? "HOT" : "NORMAL";
+}
+
+// ====================================================
+// 27.5°C OR BELOW
+//
+// FAN OFF
+// BULB ON
+// ====================================================
+
+// ====================================================
+// 27.6°C - 28.9°C
+//
+// KEEP PREVIOUS STATE
+// ====================================================
+
+// ====================================================
+// H. APPLY RELAY STATES
+// ====================================================
+
+applyRelayStates();
+
+// ====================================================
+// I. UPDATE LCD FIRST
+// ====================================================
+
+displayStatus(
+temperature,
+humidity
+);
+
+// ====================================================
+// J. SERIAL MONITOR
+// ====================================================
+
+Serial.println();
+Serial.println(
+"================================"
+);
+
+Serial.print(
+"TEMP : "
+);
+
+Serial.print(
+temperature,
+1
+);
+
+Serial.println(
+" C"
+);
+
+Serial.print(
+"HUMIDITY : "
+);
+
+Serial.print(
+humidity,
+1
+);
+
+Serial.println(
+" %"
+);
+
+Serial.print(
+"HEAT INDEX : "
+);
+
+Serial.print(
+heatIndex,
+1
+);
+
+Serial.println(
+" C"
+);
+
+Serial.print(
+"STATUS : "
+);
+
+Serial.println(
+statusStr
+);
+
+Serial.print(
+"FAN : "
+);
+
+if (fanIsOn)
+{
+Serial.println(
+"ON"
+);
+}
+else
+{
+Serial.println(
+"OFF"
+);
+}
+
+Serial.print(
+"BULB : "
+);
+
+if (bulbIsOn)
+{
+Serial.println(
+"ON"
+);
+}
+else
+{
+Serial.println(
+"OFF"
+);
+}
+
+Serial.print(
+"BULB ON TEMP : "
+);
+
+Serial.print(
+firebaseBulbOnTemp,
+1
+);
+
+Serial.println(
+" C"
+);
+
+Serial.print(
+"FAN ON TEMP : "
+);
+
+Serial.print(
+firebaseFanOnTemp,
+1
+);
+
+Serial.println(
+" C"
+);
+
+Serial.println(
+"================================"
+);
+
+// ====================================================
+// K. SEND DATA TO FIREBASE REALTIME DATABASE
+// ====================================================
+
+if (
+WiFi.status() == WL_CONNECTED
+)
+{
+writeFirebaseSensorReading(
+temperature,
+humidity,
+heatIndex,
+statusStr
+);
+
+// In manual mode, Firebase contains the operator's command. Do not write
+// the previous relay state back over a command before the next poll.
+if (!firebaseSystemEnabled || firebaseAutomaticMode)
+{
+writeFirebaseControlState();
+}
+}
+
+// ====================================================
+// END OF LOOP
+// ====================================================
+}

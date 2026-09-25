@@ -1,0 +1,7 @@
+<?php
+session_start();
+session_unset(); // Burahin lahat ng session variables
+session_destroy(); // I-destroy ang session
+header('Location: index.php'); // I-redirect pabalik sa login page
+exit();
+?>

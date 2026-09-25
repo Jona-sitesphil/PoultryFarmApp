@@ -1,0 +1,67 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "sensor_readings": {
+      ".read": true,
+      ".indexOn": ["reading_time"],
+      "$readingId": {
+        ".write": true
+      }
+    },
+    "alerts": {
+      ".read": true,
+      ".indexOn": ["created_at"],
+      "$alertId": {
+        ".write": true
+      }
+    },
+    "report_history": {
+      ".read": true,
+      ".indexOn": ["generated_on"],
+      "$reportId": {
+        ".write": true
+      }
+    },
+    "settings": {
+      "$settingId": {
+        ".read": true,
+        ".write": true
+      }
+    },
+    "system_settings": {
+      ".read": true,
+      ".write": true,
+      "control": {
+        ".validate": "newData.hasChildren(['system_enabled', 'system_mode', 'max_temp', 'max_hum', 'min_temp', 'exhaust_fan', 'heater', 'cooling_mist', 'email_notifications']) && newData.child('system_enabled').isBoolean() && newData.child('system_mode').isString() && (newData.child('system_mode').val() == 'automatic' || newData.child('system_mode').val() == 'manual') && newData.child('max_temp').isNumber() && newData.child('max_hum').isNumber() && newData.child('min_temp').isNumber() && newData.child('exhaust_fan').isBoolean() && newData.child('heater').isBoolean() && newData.child('cooling_mist').isBoolean() && newData.child('email_notifications').isBoolean()",
+        "system_enabled": {
+          ".validate": "newData.isBoolean()"
+        },
+        "system_mode": {
+          ".validate": "newData.isString() && (newData.val() == 'automatic' || newData.val() == 'manual')"
+        },
+        "max_temp": {
+          ".validate": "newData.isNumber()"
+        },
+        "max_hum": {
+          ".validate": "newData.isNumber()"
+        },
+        "min_temp": {
+          ".validate": "newData.isNumber()"
+        },
+        "exhaust_fan": {
+          ".validate": "newData.isBoolean()"
+        },
+        "heater": {
+          ".validate": "newData.isBoolean()"
+        },
+        "cooling_mist": {
+          ".validate": "newData.isBoolean()"
+        },
+        "email_notifications": {
+          ".validate": "newData.isBoolean()"
+        }
+      }
+    }
+  }
+}

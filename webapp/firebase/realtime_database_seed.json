@@ -1,0 +1,85 @@
+{
+  "settings": {
+    "general": {
+      "farm_name": "Bolbok Poultry Farm - House 1",
+      "description": "Main poultry house for quail monitoring and environmental control.",
+      "timezone": "(GMT+08:00) Asia/Manila",
+      "date_format": "MM/DD/YYYY",
+      "language": "English",
+      "auto_refresh": true,
+      "data_logging": true,
+      "unit_system": "Metric (°C, %, ppm)",
+      "theme": "Light",
+      "dashboard_view": "Overview",
+      "confirm_action": true,
+      "temp_unit": "°C",
+      "humidity_unit": "%",
+      "ammonia_unit": "ppm",
+      "decimal_places": 1,
+      "chart_data_points": "24 Hours"
+    }
+  },
+  "system_settings": {
+    "control": {
+      "system_enabled": false,
+      "system_mode": "automatic",
+      "max_temp": 29,
+      "max_hum": 80,
+      "min_temp": 27.5,
+      "exhaust_fan": false,
+      "heater": false,
+      "cooling_mist": false,
+      "email_notifications": true
+    }
+  },
+  "sensor_readings": {
+    "reading-001": {
+      "temperature": 29.8,
+      "humidity": 71,
+      "heat_index": 30.5,
+      "status": "NORMAL",
+      "fan_status": "OFF",
+      "bulb_status": "OFF",
+      "reading_time": "2026-09-09T08:00:00.000Z"
+    },
+    "reading-002": {
+      "temperature": 30.2,
+      "humidity": 73,
+      "heat_index": 31.1,
+      "status": "NORMAL",
+      "fan_status": "ON",
+      "bulb_status": "OFF",
+      "reading_time": "2026-09-09T08:05:00.000Z"
+    }
+  },
+  "alerts": {
+    "alert-001": {
+      "alert_type": "info",
+      "title": "System Operating Normally",
+      "description": "Temperature and humidity are within safe limits.",
+      "location": "House 1 - Zone A",
+      "sensor_name": "Environmental Sensor ENV-01",
+      "icon": "check_circle",
+      "created_at": "2026-09-09T08:00:00.000Z",
+      "is_read": false
+    },
+    "alert-002": {
+      "alert_type": "warning",
+      "title": "Temperature Warning",
+      "description": "Temperature is approaching the configured limit.",
+      "location": "House 1 - Zone A",
+      "sensor_name": "Temperature Sensor TEMP-01",
+      "icon": "warning",
+      "created_at": "2026-09-09T08:05:00.000Z",
+      "is_read": false
+    }
+  },
+  "report_history": {
+    "report-001": {
+      "report_name": "Daily Poultry Environment Report",
+      "date_range": "September 9, 2026",
+      "generated_on": "2026-09-09T08:10:00.000Z",
+      "generated_by": "system"
+    }
+  }
+}

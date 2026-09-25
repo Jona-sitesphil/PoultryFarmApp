@@ -1,0 +1,372 @@
+<?php
+session_start();
+require_once 'db.php';
+
+// Handle AJAX Requests para sa pagpindot ng mga buttons
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json');
+
+    // Para hindi mapindot ng Viewer
+    if (strcasecmp($_SESSION['role'] ?? 'Viewer', 'Viewer') === 0) {
+        echo json_encode(['status' => 'error', 'message' => 'Viewers cannot control devices.']);
+        exit;
+    }
+
+    $action = $_POST['action'];
+
+    if ($action === 'toggle_device') {
+        $device = $_POST['device'] ?? '';
+
+        $stmt = $conn->prepare("SELECT setting_value FROM system_settings WHERE setting_key = ?");
+        $stmt->bind_param("s", $device);
+        $stmt->execute();
+        $res = $stmt->get_result();
+        $row = $res->fetch_assoc();
+        $stmt->close();
+
+        $current_state = $row['setting_value'] ?? 'OFF';
+        $new_state = ($current_state === 'ON') ? 'OFF' : 'ON';
+
+        $update = $conn->prepare("UPDATE system_settings SET setting_value = ? WHERE setting_key = ?");
+        $update->bind_param("ss", $new_state, $device);
+        $update->execute();
+        $update->close();
+
+        echo json_encode(['status' => 'success', 'device' => $device, 'state' => $new_state]);
+        exit;
+    }
+}
+
+$settings = [];
+$result = $conn->query("SELECT * FROM system_settings");
+if ($result) {
+    while ($row = $result->fetch_assoc()) {
+        $settings[$row['setting_key']] = $row['setting_value'];
+    }
+}
+
+$system_mode = $settings['system_mode'] ?? 'automatic';
+$is_viewer = (strcasecmp($_SESSION['role'] ?? 'Viewer', 'Viewer') === 0);
+?>
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>IoT Mobile Dashboard</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            background-color: #eaf4f4;
+            display: flex;
+            justify-content: center;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+        }
+
+        .mobile-container {
+            width: 100%;
+            max-width: 420px;
+            background-color: #eaf4f4;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 20px;
+            background-color: transparent;
+            color: #333;
+        }
+
+        .header i {
+            font-size: 1.2rem;
+            cursor: pointer;
+        }
+
+        .header h1 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #555;
+        }
+
+        /* ======== HARDWARE LCD DESIGN ======== */
+        .lcd-module {
+            background-color: #0b6623;
+            /* Green PCB Board */
+            padding: 12px;
+            border-radius: 6px;
+            margin: 10px 25px 30px;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2), inset 0 0 5px rgba(0, 0, 0, 0.5);
+            position: relative;
+            border: 2px solid #084c1a;
+        }
+
+        /* Fake Screw Holes sa corners ng module */
+        .screw {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            background-color: #silver;
+            border-radius: 50%;
+            box-shadow: inset 1px 1px 3px rgba(0, 0, 0, 0.8), inset -1px -1px 2px rgba(255, 255, 255, 0.5);
+        }
+
+        .screw-tl {
+            top: 6px;
+            left: 6px;
+        }
+
+        .screw-tr {
+            top: 6px;
+            right: 6px;
+        }
+
+        .screw-bl {
+            bottom: 6px;
+            left: 6px;
+        }
+
+        .screw-br {
+            bottom: 6px;
+            right: 6px;
+        }
+
+        .lcd-screen-inner {
+            background: linear-gradient(135deg, #0044ff 0%, #0011aa 100%);
+            /* Blue backlight */
+            border: 8px solid #111;
+            /* Black Bezel */
+            border-radius: 4px;
+            padding: 15px 15px;
+            box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.9), 0 0 10px rgba(0, 100, 255, 0.4);
+        }
+
+        .lcd-text {
+            color: #e0ffff;
+            /* Glowing cyan/white text */
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 1.3rem;
+            font-weight: bold;
+            text-shadow: 0 0 5px rgba(224, 255, 255, 0.8), 0 0 10px rgba(0, 150, 255, 0.8);
+            line-height: 1.6;
+            letter-spacing: 2px;
+            white-space: pre;
+            /* Pinapanatili yung spaces */
+        }
+
+        /* ===================================== */
+
+        .button-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 25px;
+            padding: 0 40px;
+            margin-top: 10px;
+        }
+
+        .app-btn {
+            aspect-ratio: 1.2 / 1;
+            border: none;
+            border-radius: 12px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 2.2rem;
+            color: white;
+            cursor: pointer;
+            box-shadow: 0 6px 10px rgba(0, 0, 0, 0.2);
+            transition: all 0.1s ease-in-out;
+            position: relative;
+        }
+
+        .app-btn:active {
+            transform: scale(0.92);
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        }
+
+        .app-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-blue {
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+        }
+
+        .btn-green {
+            background: linear-gradient(135deg, #4ade80, #16a34a);
+        }
+
+        .btn-red {
+            background: linear-gradient(135deg, #f87171, #dc2626);
+        }
+
+        .btn-darkblue {
+            background: linear-gradient(135deg, #60a5fa, #1d4ed8);
+        }
+
+        .active-badge {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            width: 12px;
+            height: 12px;
+            background-color: #fbbf24;
+            border-radius: 50%;
+            border: 2px solid white;
+            display: none;
+            box-shadow: 0 0 5px #fbbf24;
+            /* Added glow sa badge */
+        }
+
+        .bottom-nav {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            background-color: #ffffff;
+            display: flex;
+            justify-content: space-around;
+            padding: 15px 0;
+            border-top: 1px solid #e5e7eb;
+            box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        .bottom-nav i {
+            font-size: 1.4rem;
+            color: #9ca3af;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+
+        .bottom-nav i.active {
+            color: #3b82f6;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="mobile-container">
+
+        <div class="header">
+            <a href="dashboard.php" style="color: inherit; text-decoration: none;"><i
+                    class="fa-solid fa-angle-left"></i></a>
+            <h1>IoT Dashboard</h1>
+            <i class="fa-solid fa-ellipsis-vertical" style="opacity: 0;"></i>
+        </div>
+
+        <!-- REVISED HARDWARE LCD MODULE -->
+        <div class="lcd-module">
+            <div class="screw screw-tl"></div>
+            <div class="screw screw-tr"></div>
+            <div class="screw screw-bl"></div>
+            <div class="screw screw-br"></div>
+            <div class="lcd-screen-inner">
+                <!-- Using <pre> or white-space:pre to align text perfectly like a 16x2 Display -->
+                <div class="lcd-text" id="lcd-display">TEMP: --.-°C
+                    HUM : --.-%</div>
+            </div>
+        </div>
+
+        <div class="button-grid">
+            <button class="app-btn btn-blue" id="btn-fan" onclick="toggleDevice('exhaust_fan')" <?php echo $is_viewer ? 'disabled' : ''; ?>>
+                <i class="fa-solid fa-bolt"></i>
+                <div class="active-badge" id="badge-fan"></div>
+            </button>
+
+            <button class="app-btn btn-green" id="btn-heater" onclick="toggleDevice('heater')" <?php echo $is_viewer ? 'disabled' : ''; ?>>
+                <i class="fa-solid fa-play"></i>
+                <div class="active-badge" id="badge-heater"></div>
+            </button>
+
+            <button class="app-btn btn-red" id="btn-mist" onclick="toggleDevice('cooling_mist')" <?php echo $is_viewer ? 'disabled' : ''; ?>>
+                <i class="fa-solid fa-minus"></i>
+                <div class="active-badge" id="badge-mist"></div>
+            </button>
+
+            <button class="app-btn btn-darkblue"
+                onclick="alert('System Mode: <?php echo strtoupper($system_mode); ?>');">
+                <i class="fa-solid fa-power-off"></i>
+            </button>
+        </div>
+
+        <div class="bottom-nav">
+            <a href="dashboard.php"><i class="fa-solid fa-house active"></i></a>
+            <i class="fa-solid fa-table-cells-large"></i>
+            <a href="settings.php"><i class="fa-solid fa-gear"></i></a>
+        </div>
+
+    </div>
+
+    <script>
+        const isViewer = <?php echo json_encode($is_viewer); ?>;
+
+        function toggleDevice(deviceName) {
+            if (isViewer) {
+                alert("Viewers cannot change settings.");
+                return;
+            }
+
+            $.ajax({
+                url: 'mobile_app.php',
+                method: 'POST',
+                data: { action: 'toggle_device', device: deviceName },
+                success: function (res) {
+                    if (res.status === 'success') {
+                        if (navigator.vibrate) navigator.vibrate(50);
+                        fetchStatus();
+                    } else {
+                        alert(res.message);
+                    }
+                }
+            });
+        }
+
+        function fetchStatus() {
+            // Kunin ang sensor data (temperature & humidity) mula sa existing endpoint mo
+            $.ajax({
+                url: 'automated.php?action=get_device_status',
+                method: 'GET',
+                dataType: 'json',
+                success: function (res) {
+                    if (!res) return;
+
+                    if (res.exhaust_fan === 'ON') $('#badge-fan').show(); else $('#badge-fan').hide();
+                    if (res.heater === 'ON') $('#badge-heater').show(); else $('#badge-heater').hide();
+                    if (res.cooling_mist === 'ON') $('#badge-mist').show(); else $('#badge-mist').hide();
+
+                    // I-update ang Temperature at Humidity sa LCD text
+                    // Kung halimbawa ang variable mo sa backend ay res.temperature at res.humidity
+                    let temp = res.temperature !== undefined ? parseFloat(res.temperature).toFixed(1) : '--.-';
+                    let hum = res.humidity !== undefined ? parseFloat(res.humidity).toFixed(1) : '--.-';
+
+                    // Pinapanatili ang format na parang 16x2 screen
+                    $('#lcd-display').text(`TEMP: ${temp}°C\nHUM : ${hum}%`);
+                }
+            });
+        }
+
+        $(document).ready(function () {
+            fetchStatus();
+            setInterval(fetchStatus, 2000);
+        });
+    </script>
+</body>
+
+</html>

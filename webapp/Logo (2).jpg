@@ -1,0 +1,48 @@
+<?php
+// get_live_data.php
+header('Content-Type: application/json');
+require_once 'db.php';
+
+$response = ['success' => false];
+
+// 1. Kunin ang pinakabagong record para sa top cards
+$sql_latest = "SELECT * FROM sensor_readings ORDER BY id DESC LIMIT 1";
+$result_latest = $conn->query($sql_latest);
+
+if ($result_latest && $result_latest->num_rows > 0) {
+    $row = $result_latest->fetch_assoc();
+
+    $latest_temp = $row['temperature'] ?? '0.0';
+    $latest_hum = $row['humidity'] ?? '0';
+    $latest_fan = $row['fan_status'] ?? 'OFF';
+
+    // 2. Kunin ang huling 10 records para sa live chart trend (Inayos mula luma patungong bago)
+    $chart_sql = "SELECT * FROM (SELECT * FROM sensor_readings ORDER BY id DESC LIMIT 10) sub ORDER BY id ASC";
+    $chart_res = $conn->query($chart_sql);
+
+    $labels = [];
+    $temps = [];
+    $hums = [];
+
+    while ($c_row = $chart_res->fetch_assoc()) {
+        $labels[] = isset($c_row['reading_time']) ? date('g:i:s A', strtotime($c_row['reading_time'])) : date('g:i:s A');
+        $temps[] = floatval($c_row['temperature']);
+        $hums[] = round(floatval($c_row['humidity']));
+    }
+
+    $response['success'] = true;
+    $response['latest'] = [
+        'temperature' => $latest_temp,
+        'humidity' => $latest_hum,
+        'fan_status' => $latest_fan
+    ];
+    $response['chart'] = [
+        'labels' => $labels,
+        'temperatures' => $temps,
+        'humidities' => $hums
+    ];
+}
+
+$conn->close();
+echo json_encode($response);
+?>

@@ -1,0 +1,16 @@
+<?php
+require_once 'db.php'; // Siguraduhin na tama ang pangalan ng file
+
+$new_password = "admin123"; // Ito ang magiging bagong password mo
+$hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
+
+$sql = "UPDATE users SET password = ? WHERE username = 'admin'";
+$stmt = $conn->prepare($sql);
+$stmt->bind_param("s", $hashed_password);
+
+if ($stmt->execute()) {
+    echo "Password updated! Subukan mong mag-login gamit ang: <b>admin123</b>";
+} else {
+    echo "Error updating password.";
+}
+?>

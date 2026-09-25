@@ -1,0 +1,67 @@
+<?php
+session_start();
+require_once 'db.php';
+
+// Kapag direktang pinuntahan ang login.php nang walang submit, ibalik sa index.php
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    header('Location: index.php');
+    exit();
+}
+
+$username = trim($_POST['username'] ?? '');
+$password = trim($_POST['password'] ?? '');
+
+// 1. I-check kung blangko ang fields
+if (empty($username) || empty($password)) {
+    header('Location: index.php?error=' . urlencode('Lahat ng fields ay kinakailangan.'));
+    exit();
+}
+
+// 2. Hanapin ang user sa database kasama ang kanilang 'role'
+$stmt = $conn->prepare("SELECT id, username, password, status, role FROM users WHERE username = ? OR email = ?");
+if ($stmt) {
+    $stmt->bind_param("ss", $username, $username);
+    $stmt->execute();
+    $result = $stmt->get_result();
+
+    if ($result->num_rows === 1) {
+        $user = $result->fetch_assoc();
+
+        // 3. I-check kung Active ang status ng account
+        if (isset($user['status']) && strtolower($user['status']) !== 'active') {
+            $stmt->close();
+            $conn->close();
+            header('Location: index.php?error=' . urlencode('Ang account na ito ay Inactive.'));
+            exit();
+        }
+
+        // 4. I-verify ang password (suportado ang hashed at plain text)
+        if ($password === $user['password'] || password_verify($password, $user['password'])) {
+            $_SESSION['user_id'] = $user['id'];
+            $_SESSION['username'] = $user['username'];
+            $_SESSION['role'] = $user['role'] ?? 'Viewer'; // Dito nase-set ang tamang role sa session
+
+            $stmt->close();
+            $conn->close();
+
+            // Tagumpay: Diretso sa dashboard
+            header('Location: dashboard.php');
+            exit();
+        } else {
+            $stmt->close();
+            $conn->close();
+            header('Location: index.php?error=' . urlencode('Mali ang password mo pre!'));
+            exit();
+        }
+    } else {
+        $stmt->close();
+        $conn->close();
+        header('Location: index.php?error=' . urlencode('Walang ganyang username pre!'));
+        exit();
+    }
+} else {
+    $conn->close();
+    header('Location: index.php?error=' . urlencode('Database error.'));
+    exit();
+}
+?>

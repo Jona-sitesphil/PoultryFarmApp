@@ -1,0 +1,23 @@
+<?php
+// get_settings.php
+header('Content-Type: application/json');
+require_once 'db.php';
+
+$response = ['success' => false, 'settings' => []];
+
+$sql = "SELECT setting_key, setting_value FROM system_settings";
+$result = $conn->query($sql);
+
+if ($result && $result->num_rows > 0) {
+    $settings = [];
+    while ($row = $result->fetch_assoc()) {
+        $settings[$row['setting_key']] = $row['setting_value'];
+    }
+
+    $response['success'] = true;
+    $response['settings'] = $settings;
+}
+
+$conn->close();
+echo json_encode($response);
+?>

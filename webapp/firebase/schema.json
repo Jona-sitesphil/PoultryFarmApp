@@ -1,0 +1,60 @@
+{
+  "source": "../../assets/images/thesis_poultry_system_db.sql",
+  "databaseUrl": "https://thesispoultry-ccb04-default-rtdb.firebaseio.com",
+  "paths": {
+    "sensor_readings/{readingId}": {
+      "temperature": "number",
+      "humidity": "number",
+      "heat_index": "number|null",
+      "status": "string",
+      "fan_status": "string",
+      "bulb_status": "string",
+      "reading_time": "ISO-8601 string"
+    },
+    "alerts/{alertId}": {
+      "alert_type": "string",
+      "title": "string",
+      "description": "string",
+      "location": "string",
+      "sensor_name": "string",
+      "icon": "string",
+      "created_at": "ISO-8601 string",
+      "is_read": "boolean"
+    },
+    "report_history/{reportId}": {
+      "report_name": "string",
+      "date_range": "string",
+      "generated_on": "ISO-8601 string",
+      "generated_by": "string"
+    },
+    "settings/general": {
+      "farm_name": "string",
+      "description": "string",
+      "timezone": "string",
+      "date_format": "string",
+      "language": "string",
+      "auto_refresh": "boolean",
+      "data_logging": "boolean",
+      "unit_system": "string",
+      "theme": "string",
+      "dashboard_view": "string",
+      "confirm_action": "boolean",
+      "temp_unit": "string",
+      "humidity_unit": "string",
+      "ammonia_unit": "string",
+      "decimal_places": "number",
+      "chart_data_points": "string"
+    },
+    "system_settings/control": {
+      "system_enabled": "boolean",
+      "system_mode": "string",
+      "max_temp": "number",
+      "max_hum": "number",
+      "min_temp": "number",
+      "exhaust_fan": "boolean",
+      "heater": "boolean",
+      "cooling_mist": "boolean",
+      "email_notifications": "boolean"
+    }
+  }
+}
